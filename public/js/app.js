@@ -27,10 +27,21 @@
   var animateMove = false;
   var gameOver = null;
   var clock = { w: 0, b: 0, enabled: false };
+  var clockTickAt = Date.now();
   var botThinking = false;
   var opponentName = 'Bot';
   var ws = null;
+  var wsOpenCallbacks = [];
+  var reconnectTimer = null;
+  var heartbeatTimer = null;
+  var reconnectDelay = 1000;
+  var lastPongAt = 0;
+  var reconnectNoticeShown = false;
+  var pendingMove = false;
+  var pendingMoveTimer = null;
   var roomCode = null;
+  var roomPaused = false;
+  var resumingSavedRoom = false;
   var playersInRoom = 1;
   var pendingPromo = null;
   var audioCtx = null;
@@ -137,6 +148,16 @@
   renderMusicControl(false);
 
   // ── Login ──
+  function getResumeToken() {
+    var token = localStorage.getItem('gc_online_resume_token');
+    if (!token) {
+      token = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() :
+        (Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
+      localStorage.setItem('gc_online_resume_token', token);
+    }
+    return token;
+  }
+
   function doLogin() {
     var v = $('nick-input').value.trim();
     if (!v) { toast('Escolha um apelido para jogar.'); return; }
@@ -145,11 +166,13 @@
     if (localStorage.getItem('gc_ambience') !== 'off' && !window.ChessAmbience.isEnabled()) setAmbientMusic(true, false);
     $('menu-nick').textContent = nick;
     var params = new URLSearchParams(location.search);
-    var room = params.get('room');
+    var room = params.get('room') || localStorage.getItem('gc_online_room');
     if (room) {
       mode = 'online';
+      roomCode = room.toUpperCase();
+      resumingSavedRoom = !params.get('room');
       showScreen('screen-lobby');
-      connectWS(function () { joinRoom(room.toUpperCase()); });
+      joinRoom(roomCode);
     } else {
       showScreen('screen-menu');
     }
@@ -173,6 +196,14 @@
   $('mode-bot').addEventListener('click', function () { showScreen('screen-bot-setup'); });
   $('mode-online').addEventListener('click', function () {
     mode = 'online';
+    var savedRoom = localStorage.getItem('gc_online_room');
+    if (savedRoom) {
+      roomCode = savedRoom;
+      resumingSavedRoom = true;
+      showScreen('screen-lobby');
+      joinRoom(savedRoom);
+      return;
+    }
     showScreen('screen-lobby');
     beginRoomPolling();
   });
@@ -220,6 +251,8 @@
     botThinking = false;
     orientation = myColor;
     clock = { w: clockSeconds || 0, b: clockSeconds || 0, enabled: !!clockSeconds };
+    clockTickAt = Date.now();
+    pendingMove = false;
     $('chat-box').classList.toggle('hidden', mode !== 'online');
     $('room-info-box').classList.toggle('hidden', mode !== 'online');
     $('btn-undo').classList.toggle('hidden', mode !== 'bot');
@@ -415,7 +448,10 @@
   function renderStatus() {
     var el = $('status-line');
     if (gameOver) { el.textContent = gameOverText(gameOver); return; }
-    if (mode === 'online' && playersInRoom < 2) { el.textContent = '⏳ Aguardando o adversário entrar na sala… Envie o link para ele!'; return; }
+    if (mode === 'online' && roomPaused) { el.textContent = 'Partida pausada até os jogadores se reconectarem. O tempo está parado.'; return; }
+    if (mode === 'online' && roomCode && (!ws || ws.readyState !== 1)) { el.textContent = 'Conexão instável. Reconectando e sincronizando a partida…'; return; }
+    if (mode === 'online' && pendingMove) { el.textContent = 'Enviando seu lance…'; return; }
+    if (mode === 'online' && playersInRoom < 2) { el.textContent = '⏳ Aguardando o adversário entrar na sala…'; return; }
     if (botThinking) { el.textContent = '🤖 Bot pensando…'; return; }
     if (state.turn === myColor) {
       el.textContent = E.inCheck(state, myColor) ? '⚠ Xeque! Sua vez de jogar.' : 'Sua vez de jogar.';
@@ -432,18 +468,20 @@
     $('thinking').classList.toggle('hidden', !botThinking);
   }
 
-  // ── Relógio ──
+  // ── Relógio: calcula o tempo real decorrido, inclusive após abas em segundo plano ──
   setInterval(function () {
-    if (!state || !clock.enabled || gameOver || !document.getElementById('screen-game').classList.contains('active')) return;
+    var now = Date.now();
+    var elapsed = Math.max(0, (now - clockTickAt) / 1000);
+    clockTickAt = now;
+    if (!state || !clock.enabled || gameOver || !$('screen-game').classList.contains('active')) return;
     if (mode === 'online' && playersInRoom < 2) return;
-    clock[state.turn] -= 0.1;
-    if (clock[state.turn] <= 0) {
-      clock[state.turn] = 0;
+    clock[state.turn] = Math.max(0, clock[state.turn] - elapsed);
+    if (clock[state.turn] <= 0 && mode === 'bot') {
       var loser = state.turn;
       onGameOver({ result: loser === 'w' ? '0-1' : '1-0', reason: 'timeout', winner: E.opp(loser) });
     }
     renderClocks();
-  }, 100);
+  }, 250);
 
   // ── Interação com o tabuleiro (clique + arrastar) ──
   var drag = null; // {from, ghost, startX, startY, moved}
@@ -457,8 +495,8 @@
   }
 
   function canPlay() {
-    if (!state || gameOver || botThinking) return false;
-    if (mode === 'online' && playersInRoom < 2) return false;
+    if (!state || gameOver || botThinking || pendingMove) return false;
+    if (mode === 'online' && (!ws || ws.readyState !== 1 || roomPaused || playersInRoom < 2)) return false;
     return state.turn === myColor;
   }
 
@@ -565,10 +603,22 @@
       afterMove(isCapture);
       if (!gameOver) botTurn();
     } else {
-      // online: servidor valida e devolve o estado oficial
-      ws.send(JSON.stringify({ type: 'move', move: { from: move.from, to: move.to, promotion: move.promotion } }));
+      // Online: só envia com socket aberto; o servidor continua sendo a fonte oficial.
+      if (!sendOnlineMessage({ type: 'move', move: { from: move.from, to: move.to, promotion: move.promotion } })) {
+        renderAll();
+        return;
+      }
+      pendingMove = true;
+      clearPendingMoveTimer();
+      pendingMoveTimer = setTimeout(function () {
+        if (!pendingMove) return;
+        if (!reconnectNoticeShown) toast('Sem resposta do servidor. Reconectando e recuperando a partida…');
+        reconnectNoticeShown = true;
+        if (ws) { try { ws.close(); } catch (e) {} }
+        else scheduleReconnect(true);
+      }, 10000);
       selected = null; legalCache = [];
-      renderBoard();
+      renderAll();
     }
   }
 
@@ -630,8 +680,7 @@
     $('gameover-modal').classList.add('hidden');
     if (mode === 'bot') {
       startGame(clock.enabled ? clock.w || 600 : 0);
-    } else if (ws) {
-      ws.send(JSON.stringify({ type: 'rematch' }));
+    } else if (sendOnlineMessage({ type: 'rematch' })) {
       toast('Revanche pedida! Aguardando o adversário aceitar…');
     }
   });
@@ -673,50 +722,173 @@
     this.textContent = '🏳 Desistir';
     if (mode === 'bot') {
       onGameOver({ result: myColor === 'w' ? '0-1' : '1-0', reason: 'resign', winner: botColor });
-    } else if (ws) {
-      ws.send(JSON.stringify({ type: 'resign' }));
+    } else {
+      sendOnlineMessage({ type: 'resign' });
     }
   });
 
   $('btn-leave').addEventListener('click', leaveGame);
 
   function leaveGame() {
-    if (mode === 'online' && ws) {
-      try { ws.close(); } catch (e) {}
-      ws = null;
+    if (mode === 'online') {
+      // Keep the room code/token so a voluntary menu exit can still be resumed later.
       roomCode = null;
+      roomPaused = false;
+      pendingMove = false;
+      clearPendingMoveTimer();
+      reconnectNoticeShown = false;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      if (ws) { try { ws.close(); } catch (e) {} }
+      ws = null;
       window._onlinePlayers = [];
     }
     mode = null;
     showScreen('screen-menu');
   }
 
-  // ── Online: WebSocket ──
+  // ── Online: WebSocket com heartbeat e reconexão/sincronização automática ──
+  function activeRoomNeedsReconnect() {
+    return mode === 'online' && !!roomCode && $('screen-game').classList.contains('active');
+  }
+
+  function scheduleReconnect(immediate) {
+    if (reconnectTimer || !activeRoomNeedsReconnect()) return;
+    var wait = immediate ? 0 : reconnectDelay;
+    reconnectDelay = Math.min(15000, reconnectDelay * 2);
+    reconnectTimer = setTimeout(function () {
+      reconnectTimer = null;
+      if (activeRoomNeedsReconnect()) connectWS();
+    }, wait);
+  }
+
+  function startHeartbeat(socket) {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    lastPongAt = Date.now();
+    heartbeatTimer = setInterval(function () {
+      if (ws !== socket || socket.readyState !== 1 || document.visibilityState !== 'visible') return;
+      if (Date.now() - lastPongAt > 45000) {
+        try { socket.close(); } catch (e) {}
+        return;
+      }
+      try { socket.send(JSON.stringify({ type: 'ping' })); }
+      catch (e) { try { socket.close(); } catch (ignore) {} }
+    }, 20000);
+  }
+
+  function clearPendingMoveTimer() {
+    if (pendingMoveTimer) clearTimeout(pendingMoveTimer);
+    pendingMoveTimer = null;
+  }
+
+  function sendOnlineMessage(message) {
+    if (!ws || ws.readyState !== 1) {
+      if (activeRoomNeedsReconnect()) scheduleReconnect(true);
+      return false;
+    }
+    try {
+      ws.send(JSON.stringify(message));
+      return true;
+    } catch (e) {
+      try { ws.close(); } catch (ignore) {}
+      return false;
+    }
+  }
+
   function connectWS(cb) {
-    if (ws && ws.readyState === 1) { if (cb) cb(); return; }
+    if (cb) wsOpenCallbacks.push(cb);
+    if (ws && (ws.readyState === 1 || ws.readyState === 0)) return;
     var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(proto + '//' + location.host);
-    ws.onopen = function () { if (cb) cb(); };
-    ws.onerror = function () {
+    var socket;
+    try { socket = new WebSocket(proto + '//' + location.host); }
+    catch (e) {
+      wsOpenCallbacks = [];
       if (creatingRoom) resetCreateRoomButton();
-      toast('Não foi possível conectar ao servidor.');
+      if (activeRoomNeedsReconnect()) scheduleReconnect();
+      else toast('Não foi possível conectar ao servidor.');
+      return;
+    }
+    ws = socket;
+    socket.onopen = function () {
+      if (ws !== socket) return;
+      reconnectDelay = 1000;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      startHeartbeat(socket);
+      // Rejoin by the existing room and nickname; the server sends the authoritative state.
+      if (activeRoomNeedsReconnect()) {
+        try { socket.send(JSON.stringify({ type: 'join', name: nick, code: roomCode, resumeToken: getResumeToken() })); }
+        catch (e) { try { socket.close(); } catch (ignore) {} return; }
+      }
+      var callbacks = wsOpenCallbacks.slice();
+      wsOpenCallbacks = [];
+      callbacks.forEach(function (callback) { try { callback(); } catch (e) { toast('Falha ao enviar a ação.'); } });
     };
-    ws.onclose = function () {
+    socket.onerror = function () {
+      if (creatingRoom) resetCreateRoomButton();
+      if (!activeRoomNeedsReconnect()) toast('Não foi possível conectar ao servidor.');
+    };
+    socket.onclose = function () {
+      if (ws !== socket) return;
       ws = null;
+      wsOpenCallbacks = [];
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
       if (creatingRoom) resetCreateRoomButton();
+      if (activeRoomNeedsReconnect()) {
+        if (!reconnectNoticeShown) toast('Conexão interrompida. Tentando reconectar…');
+        reconnectNoticeShown = true;
+        renderAll();
+        scheduleReconnect();
+      }
     };
-    ws.onmessage = function (ev) {
+    socket.onmessage = function (ev) {
+      if (ws !== socket) return;
       var msg;
       try { msg = JSON.parse(ev.data); } catch (e) { return; }
       handleServerMsg(msg);
     };
   }
 
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState !== 'visible' || !activeRoomNeedsReconnect()) return;
+    if (!ws || ws.readyState !== 1) { scheduleReconnect(true); return; }
+    var socket = ws;
+    var pongBefore = lastPongAt;
+    if (!sendOnlineMessage({ type: 'ping' })) return;
+    setTimeout(function () {
+      if (ws === socket && socket.readyState === 1 && lastPongAt <= pongBefore) {
+        try { socket.close(); } catch (e) {}
+      }
+    }, 8000);
+  });
+  window.addEventListener('online', function () { if (activeRoomNeedsReconnect() && (!ws || ws.readyState !== 1)) scheduleReconnect(true); });
+  window.addEventListener('pagehide', function () {
+    if (mode === 'online' && roomCode && ws && ws.readyState === 1) {
+      try { ws.close(1000, 'page hidden'); } catch (e) {}
+    }
+  });
+
+  function connectedPlayerCount(players) {
+    return (players || []).filter(function (player) { return player.connected !== false; }).length;
+  }
+
   function handleServerMsg(msg) {
+    if (msg.type === 'pong') { lastPongAt = Date.now(); return; }
     if (msg.type === 'roomList') { renderRoomList(msg.rooms); return; }
     if (msg.type === 'error') {
       if (creatingRoom) resetCreateRoomButton();
+      if (resumingSavedRoom) {
+        resumingSavedRoom = false;
+        localStorage.removeItem('gc_online_room');
+        localStorage.removeItem('gc_online_resume_token');
+        roomCode = null;
+        mode = null;
+        showScreen('screen-menu');
+        toast('Não foi possível retomar a sala. Ela pode ter expirado ou o servidor reiniciado.');
+        return;
+      }
+      pendingMove = false;
+      clearPendingMoveTimer();
       toast(msg.message);
+      if (mode === 'online' && $('screen-game').classList.contains('active')) renderAll();
       if (mode === 'online' && $('screen-lobby').classList.contains('active')) refreshRoomList();
       return;
     }
@@ -724,14 +896,23 @@
       stopRoomPolling();
       resetCreateRoomButton();
       roomCode = msg.code;
+      localStorage.setItem('gc_online_room', msg.code);
+      if (msg.yourResumeToken) localStorage.setItem('gc_online_resume_token', msg.yourResumeToken);
+      resumingSavedRoom = false;
+      roomPaused = !!msg.paused;
       myColor = msg.yourColor;
       state = msg.state;
       history = msg.history || [];
       lastMove = msg.lastMove || null;
       window._onlinePlayers = msg.players || [];
-      playersInRoom = (msg.players || []).length;
+      playersInRoom = connectedPlayerCount(msg.players);
       gameOver = msg.over || null;
       clock = { w: msg.clock ? msg.clock.w : 600, b: msg.clock ? msg.clock.b : 600, enabled: true };
+      clockTickAt = Date.now();
+      pendingMove = false;
+      clearPendingMoveTimer();
+      if (reconnectNoticeShown) toast('Conexão restabelecida; partida sincronizada.');
+      reconnectNoticeShown = false;
       $('chat-messages').innerHTML = '';
       addChat('Sistema', 'Você entrou na sala ' + msg.code + ' como ' + (myColor === 'w' ? 'brancas' : 'pretas') + '.', true);
       startGameOnline();
@@ -741,8 +922,12 @@
       state = msg.state;
       history = msg.history || [];
       window._onlinePlayers = msg.players || [];
-      playersInRoom = (msg.players || []).length;
+      playersInRoom = connectedPlayerCount(msg.players);
+      roomPaused = !!msg.paused;
       clock = { w: msg.clock.w, b: msg.clock.b, enabled: true };
+      clockTickAt = Date.now();
+      pendingMove = false;
+      clearPendingMoveTimer();
       lastMove = msg.lastMove || null;
       animateMove = !!msg.lastMove;
       selected = null; legalCache = [];
@@ -760,20 +945,27 @@
     }
     if (msg.type === 'opponentJoined') {
       window._onlinePlayers = msg.players || [];
-      playersInRoom = (msg.players || []).length;
+      playersInRoom = connectedPlayerCount(msg.players);
+      roomPaused = !!msg.paused;
       state = msg.state; history = msg.history || [];
+      if (msg.clock) { clock = { w: msg.clock.w, b: msg.clock.b, enabled: true }; clockTickAt = Date.now(); }
       addChat('Sistema', 'Adversário entrou na sala! Boa partida.', true);
       renderAll();
       return;
     }
     if (msg.type === 'opponentLeft') {
       window._onlinePlayers = msg.players || [];
+      playersInRoom = connectedPlayerCount(msg.players);
+      roomPaused = !!msg.paused || playersInRoom < 2;
       addChat('Sistema', 'O adversário desconectou. Ele pode voltar com o mesmo apelido.', true);
       renderAll();
       return;
     }
     if (msg.type === 'opponentBack') {
       window._onlinePlayers = msg.players || [];
+      playersInRoom = connectedPlayerCount(msg.players);
+      roomPaused = !!msg.paused;
+      if (msg.clock) { clock = { w: msg.clock.w, b: msg.clock.b, enabled: true }; clockTickAt = Date.now(); }
       addChat('Sistema', 'O adversário voltou! A partida continua.', true);
       renderAll();
       return;
@@ -789,7 +981,9 @@
       history = msg.history || [];
       window._onlinePlayers = msg.players || [];
       clock = { w: msg.clock.w, b: msg.clock.b, enabled: true };
+      clockTickAt = Date.now();
       gameOver = null;
+      pendingMove = false;
       lastMove = null;
       $('gameover-modal').classList.add('hidden');
       addChat('Sistema', 'Revanche! Nova partida começando.', true);
@@ -808,6 +1002,7 @@
     $('room-info-box').classList.remove('hidden');
     $('btn-undo').classList.add('hidden');
     renderAll();
+    if (gameOver) $('gameover-modal').classList.remove('hidden');
   }
 
   // ── Lobby: salas públicas atualizadas pelo servidor e por polling leve ──
@@ -843,19 +1038,25 @@
     this.disabled = true;
     this.textContent = 'Abrindo sala…';
     connectWS(function () {
-      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'create', name: nick }));
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'create', name: nick, resumeToken: getResumeToken() }));
     });
   });
 
   function joinRoom(code) {
     if (!code) { toast('Essa partida não está disponível. Atualizando salas…'); refreshRoomList(); return; }
     connectWS(function () {
-      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'join', name: nick, code: code }));
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'join', name: nick, code: code, resumeToken: getResumeToken() }));
     });
   }
   $('btn-refresh-rooms').addEventListener('click', refreshRoomList);
   $('btn-lobby-back').addEventListener('click', function () {
     stopRoomPolling();
+    if (resumingSavedRoom) {
+      localStorage.removeItem('gc_online_room');
+      localStorage.removeItem('gc_online_resume_token');
+      resumingSavedRoom = false;
+      roomCode = null;
+    }
     if (ws) { try { ws.close(); } catch (e) {} ws = null; }
     mode = null;
     resetCreateRoomButton();
@@ -920,8 +1121,8 @@
   function sendChat() {
     var input = $('chat-input');
     var text = input.value.trim();
-    if (!text || !ws) return;
-    ws.send(JSON.stringify({ type: 'chat', text: text }));
+    if (!text) return;
+    if (!sendOnlineMessage({ type: 'chat', text: text })) return;
     input.value = '';
   }
   $('btn-chat').addEventListener('click', sendChat);
