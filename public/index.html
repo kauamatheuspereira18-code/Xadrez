@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090911">
+  <meta name="description" content="Xadrez Gay: partidas elegantes, inclusivas e online. Jogue contra a IA ou convide alguém para a mesa — sem cadastro.">
+  <title>Xadrez Gay — Clube de Xadrez</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='%2313111d'/><text x='50' y='76' text-anchor='middle' font-size='72' fill='%23c49aff'>♔</text></svg>">
+  <link rel="stylesheet" href="css/style.css?v=20261116-sound-05">
+</head>
+<body data-theme="walnut">
+  <div class="site-grain" aria-hidden="true"></div>
+
+  <!-- Entrada: acesso com apelido, sem conta ou senha. -->
+  <section id="screen-login" class="screen active">
+    <header class="site-header landing-header">
+      <a class="brand-lockup" href="#" aria-label="Xadrez Gay, início">
+        <span class="brand-symbol">♔</span>
+        <span class="brand-wordmark">XADREZ <b>GAY</b><small>JOGO ONLINE</small></span>
+      </a>
+      <div class="header-assurance"><span class="online-indicator"></span> JOGUE ONLINE <i></i> SEM CADASTRO</div>
+    </header>
+
+    <main class="landing-hero">
+      <div class="landing-copy">
+        <p class="kicker"><span class="kicker-line"></span> XADREZ ONLINE PARA TODO MUNDO</p>
+        <h1 class="game-title"><span>XADREZ</span><em>GAY</em></h1>
+        <p class="landing-intro">Monte sua estratégia, desafie a IA ou chame a galera. Um jogo de xadrez online feito para todo mundo sentar à mesma mesa.</p>
+
+        <div class="entry-form">
+          <label for="nick-input">ESCOLHA SEU NICKNAME</label>
+          <div class="entry-field">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.4"/><path d="M5.2 20c.3-3.4 2.8-5.5 6.8-5.5s6.5 2.1 6.8 5.5"/></svg>
+            <input id="nick-input" type="text" maxlength="20" placeholder="Como quer ser chamado?" autocomplete="nickname" aria-label="Seu apelido">
+          </div>
+          <button id="btn-login" class="btn btn-primary btn-big"><span>JOGAR AGORA</span><b aria-hidden="true">↗</b></button>
+          <p class="entry-assurance"><span>✓</span> Sem conta e sem senha. Entre só com seu apelido.</p>
+        </div>
+        <div class="landing-note"><span class="note-seal">✦</span><span><b>Escolha seu modo de jogo</b><small>Contra a IA ou em uma sala com amigos.</small></span></div>
+      </div>
+
+      <div class="landing-showcase">
+        <div class="showcase-heading"><span>PARTIDA DE DEMONSTRAÇÃO</span><span>CLÁSSICO <i>·</i> 10:00</span></div>
+        <div class="showcase-mat">
+          <div class="showcase-board-outer">
+            <div id="landing-board" class="landing-board" aria-hidden="true"></div>
+          </div>
+          <div class="showcase-label showcase-label-top"><span class="label-knight">♘</span><span><small>SUA PRÓXIMA JOGADA</small><b>O tabuleiro é seu.</b></span></div>
+          <div class="showcase-label showcase-label-bottom"><span class="online-indicator"></span><span><small>DESAFIE A IA OU UM AMIGO</small><b>Encontre seu próximo rival.</b></span><span class="label-arrow">↗</span></div>
+        </div>
+        <div class="showcase-footer"><span>ESTRATÉGIA · AMIZADE · ORGULHO</span><span>♙ &nbsp; ♘ &nbsp; ♗ &nbsp; ♖ &nbsp; ♕ &nbsp; ♔</span></div>
+      </div>
+    </main>
+
+    <footer class="landing-footer"><span>XADREZ GAY <i>·</i> TODO MUNDO NA MESA</span><span>3 NÍVEIS DE IA &nbsp; / &nbsp; SALAS PRIVADAS</span></footer>
+  </section>
+
+  <!-- Menu principal -->
+  <section id="screen-menu" class="screen app-screen">
+    <header class="site-header app-header">
+      <a class="brand-lockup" href="#" aria-label="Xadrez Gay"><span class="brand-symbol">♔</span><span class="brand-wordmark">XADREZ <b>GAY</b><small>CLUBE DE XADREZ</small></span></a>
+      <button id="btn-change-nick" class="text-button">Alterar apelido <span>↗</span></button>
+    </header>
+    <main class="app-main menu-main">
+      <p class="kicker"><span class="kicker-line"></span> BEM-VINDO AO CLUBE</p>
+      <h1 class="menu-title">Olá, <span id="menu-nick" class="accent"></span>.</h1>
+      <p class="page-intro">Escolha sua mesa e faça o primeiro movimento.</p>
+      <div class="mode-grid">
+        <button class="mode-card" id="mode-bot">
+          <span class="mode-number">01 / PRÁTICA</span>
+          <span class="mode-art bot-art" aria-hidden="true">♘</span>
+          <span class="mode-title">Jogar contra a IA</span>
+          <span class="mode-desc">Três níveis de jogo. Um adversário sempre pronto.</span>
+          <span class="mode-link">PREPARAR PARTIDA <b>→</b></span>
+        </button>
+        <button class="mode-card" id="mode-online">
+          <span class="mode-number">02 / COM ALGUÉM</span>
+          <span class="mode-art online-art" aria-hidden="true">♙</span>
+          <span class="mode-title">Jogar online</span>
+          <span class="mode-desc">Crie uma sala privada e convide quem você quiser.</span>
+          <span class="mode-link">ABRIR O CLUBE <b>→</b></span>
+        </button>
+      </div>
+      <div class="menu-preferences"><span>TEMA DO TABULEIRO</span><label class="select-wrap"><select id="theme-select" aria-label="Tema do tabuleiro"><option value="classic">Violeta clássico</option><option value="walnut">Ametista escura</option><option value="midnight">Azul da meia-noite</option><option value="crimson">Vinho e porcelana</option></select><span>⌄</span></label></div>
+      <div class="club-footnote"><span>♔</span> UMA PARTIDA BEM JOGADA COMEÇA COM UMA BOA ESCOLHA.</div>
+    </main>
+  </section>
+
+  <!-- Configuração da partida com IA -->
+  <section id="screen-bot-setup" class="screen app-screen">
+    <header class="site-header app-header"><a class="brand-lockup" href="#" aria-label="Xadrez Gay"><span class="brand-symbol">♔</span><span class="brand-wordmark">XADREZ <b>GAY</b><small>CLUBE DE XADREZ</small></span></a><span class="header-context">NOVA PARTIDA <i>·</i> CONTRA A IA</span></header>
+    <main class="app-main setup-main">
+      <button id="btn-bot-back" class="back-link">← <span>Voltar ao menu</span></button>
+      <p class="kicker"><span class="kicker-line"></span> PREPARE A SUA MESA</p>
+      <h1 class="page-title">Partida contra a IA</h1>
+      <p class="page-intro">Ajuste a partida ao seu estilo. O tabuleiro está pronto.</p>
+      <div class="setup-card">
+        <div class="setup-group"><label class="setup-label">NÍVEL DO ADVERSÁRIO</label><div class="seg" id="bot-level"><button data-level="facil">Iniciante</button><button data-level="intermediario" class="sel">Intermediário</button><button data-level="avancado">Avançado</button></div><p class="setup-hint" id="level-desc">Intermediário: enxerga 3 lances à frente. Bom desafio para a maioria.</p></div>
+        <div class="setup-group"><label class="setup-label">ESCOLHA AS SUAS PEÇAS</label><div class="seg" id="bot-color"><button data-color="w" class="sel">♔ Brancas</button><button data-color="random">Aleatório</button><button data-color="b">♚ Pretas</button></div></div>
+        <div class="setup-group"><label class="setup-label">CONTROLE DE TEMPO</label><div class="seg" id="bot-clock"><button data-clock="0">Livre</button><button data-clock="300">5 min</button><button data-clock="600" class="sel">10 min</button><button data-clock="900">15 min</button></div></div>
+        <button id="btn-start-bot" class="btn btn-primary btn-big">Começar partida <span>→</span></button>
+      </div>
+    </main>
+  </section>
+
+  <!-- Salas online -->
+  <section id="screen-lobby" class="screen app-screen">
+    <header class="site-header app-header"><a class="brand-lockup" href="#" aria-label="Xadrez Gay"><span class="brand-symbol">♔</span><span class="brand-wordmark">XADREZ <b>GAY</b><small>CLUBE DE XADREZ</small></span></a><span class="header-context">SALAS ABERTAS <i>·</i> ONLINE</span></header>
+    <main class="app-main lobby-main">
+      <button id="btn-lobby-back" class="back-link">← <span>Voltar ao menu</span></button>
+      <p class="kicker"><span class="kicker-line"></span> PARTIDAS ONLINE</p>
+      <h1 class="page-title">Encontre sua partida.</h1>
+      <p class="page-intro">Crie uma sala ou entre direto em uma partida aberta. Sem códigos, sem convites — só escolher e jogar.</p>
+      <div class="lobby-card">
+        <div class="lobby-create"><div class="lobby-icon">♙</div><div><h2>Abra uma nova sala</h2><p>Você entra com as peças brancas.</p></div><button id="btn-create-room" class="btn btn-primary">Criar sala <span>→</span></button></div>
+        <div class="lobby-divider"><span>OU ENTRE EM UMA PARTIDA</span></div>
+        <div class="open-rooms-head"><span>SALAS ESPERANDO JOGADOR</span><span class="rooms-live"><i></i><b id="open-room-count">0</b> AO VIVO</span><button id="btn-refresh-rooms" class="text-button">Atualizar ↻</button></div>
+        <div id="open-rooms" class="open-rooms"><p class="setup-hint">Buscando partidas abertas…</p></div>
+      </div>
+    </main>
+  </section>
+
+  <!-- Partida -->
+  <section id="screen-game" class="screen app-screen game-screen">
+    <header class="site-header app-header game-header"><a class="brand-lockup" href="#" aria-label="Xadrez Gay"><span class="brand-symbol">♔</span><span class="brand-wordmark">XADREZ <b>GAY</b><small>CLUBE DE XADREZ</small></span></a><div class="game-header-label"><span class="online-indicator"></span> PARTIDA EM ANDAMENTO</div></header>
+    <div class="game-layout">
+      <main class="board-column">
+        <div class="player-bar" id="bar-top"><div class="player-info"><span class="avatar" id="avatar-top">♚</span><div class="player-meta"><div class="player-name" id="name-top">—</div><div class="captured" id="captured-top"></div></div></div><div class="clock" id="clock-top">--:--</div></div>
+        <div class="board-stage"><div class="board-frame"><div id="board" class="board"></div></div><div id="thinking" class="thinking hidden"><span class="spinner"></span> Pensando no próximo lance…</div></div>
+        <div class="player-bar" id="bar-bottom"><div class="player-info"><span class="avatar" id="avatar-bottom">♔</span><div class="player-meta"><div class="player-name" id="name-bottom">—</div><div class="captured" id="captured-bottom"></div></div></div><div class="clock" id="clock-bottom">--:--</div></div>
+        <div class="game-toolbar"><p class="game-status" id="status-line">Sua vez de jogar.</p><div class="game-actions"><button id="btn-flip" class="btn btn-secondary">⇅ <span>Virar</span></button><button id="btn-undo" class="btn btn-secondary hidden">↶ <span>Desfazer</span></button><button id="btn-resign" class="btn btn-danger">Desistir</button><button id="btn-leave" class="btn btn-quiet">Sair</button></div></div>
+      </main>
+      <aside class="side-panel">
+        <section class="panel-box history-panel"><div class="panel-heading"><div><p class="kicker"><span class="kicker-line"></span> NOTAÇÃO</p><h2>Movimentos</h2></div><span class="panel-emblem">♘</span></div><div id="move-history" class="move-history"><p class="setup-hint">Os lances aparecem aqui.</p></div></section>
+        <section class="panel-box" id="chat-box"><div class="panel-heading"><div><p class="kicker"><span class="kicker-line"></span> MESA ONLINE</p><h2>Conversa</h2></div></div><div id="chat-messages" class="chat-messages"></div><div class="chat-input-row"><input id="chat-input" type="text" maxlength="200" placeholder="Escreva uma mensagem…"><button id="btn-chat" class="btn btn-secondary">Enviar</button></div></section>
+        <section class="panel-box room-panel" id="room-info-box"><p class="kicker"><span class="kicker-line"></span> MESA ONLINE</p><p class="room-live-title">Partida aberta</p><p class="setup-hint">Jogadores entram direto pelas salas disponíveis. Nenhum código de convite é necessário.</p><div class="rooms-live room-live-status"><i></i> CONEXÃO AO VIVO</div></section>
+      </aside>
+    </div>
+  </section>
+
+  <!-- Modais -->
+  <div id="promo-modal" class="modal hidden"><div class="modal-card"><p class="kicker"><span class="kicker-line"></span> UM NOVO DESTINO</p><h2>Escolha a peça da promoção</h2><div class="promo-row" id="promo-row"></div></div></div>
+  <div id="gameover-modal" class="modal hidden"><div class="modal-card"><div class="modal-trophy" id="gameover-icon">♔</div><p class="kicker"><span class="kicker-line"></span> FIM DE PARTIDA</p><h2 id="gameover-title">Fim de jogo</h2><p id="gameover-desc" class="page-intro"></p><button id="btn-rematch" class="btn btn-primary btn-big">Jogar novamente <span>↻</span></button><button id="btn-gameover-menu" class="btn btn-quiet">Voltar ao menu</button></div></div>
+  <button id="btn-music" class="music-toggle" type="button" aria-pressed="false" aria-label="Ativar trilha sonora ambiente">
+    <span class="music-note" aria-hidden="true">♫</span>
+    <span class="music-copy"><b>TRILHA AMBIENTE</b><small id="music-state">DESLIGADA</small></span>
+    <span class="music-switch" aria-hidden="true"><i></i></span>
+  </button>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script src="js/engine.js"></script>
+  <script src="js/bot.js"></script>
+  <script src="js/pieces.js?v=20261116-sound-05"></script>
+  <script src="js/ambience.js?v=20261116-sound-05"></script>
+  <script src="js/app.js?v=20261116-sound-05"></script>
+</body>
+</html>

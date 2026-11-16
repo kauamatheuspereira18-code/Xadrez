@@ -1,0 +1,12 @@
+{
+  "name": "grand-chess",
+  "version": "1.0.0",
+  "description": "Grand Chess — xadrez contra bot (intermediário/avançado) e online por salas, sem cadastro",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
