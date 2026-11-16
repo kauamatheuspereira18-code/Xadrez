@@ -3,6 +3,7 @@
    Salas: criar sala (gera código + link compartilhável) ou entrar com código/link. */
 const http = require('http');
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const E = require('./public/js/engine.js');
@@ -37,8 +38,21 @@ const server = http.createServer((req, res) => {
 });
 
 const wss = new WebSocketServer({ server });
+const wsHeartbeatTimer = setInterval(() => {
+  for (const client of wss.clients) {
+    if (client.readyState !== 1) continue;
+    if (client.isAlive === false) { client.terminate(); continue; }
+    client.isAlive = false;
+    try { client.ping(); } catch { client.terminate(); }
+  }
+}, 30000);
+if (wsHeartbeatTimer.unref) wsHeartbeatTimer.unref();
 
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function genResumeToken(value) {
+  const token = String(value || '').trim();
+  return token && token.length <= 128 ? token : crypto.randomBytes(24).toString('hex');
+}
 function genCode() {
   let code;
   do {
@@ -50,6 +64,7 @@ function genCode() {
 
 const rooms = new Map(); // code -> room
 const clients = new Map(); // ws -> {name, code, color}
+const ROOM_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 function roomList() {
   const list = [];
@@ -70,6 +85,17 @@ function broadcastRoomList() {
 
 function send(ws, obj) { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); }
 
+function scheduleRoomCleanup(room) {
+  if (room.cleanupTimer) clearTimeout(room.cleanupTimer);
+  room.cleanupTimer = setTimeout(() => {
+    room.cleanupTimer = null;
+    if (room.players.some(p => p.connected)) return;
+    rooms.delete(room.code);
+    broadcastRoomList();
+  }, ROOM_RETENTION_MS);
+  if (room.cleanupTimer.unref) room.cleanupTimer.unref();
+}
+
 function roomPayload(room) {
   return {
     code: room.code,
@@ -78,6 +104,7 @@ function roomPayload(room) {
     lastMove: room.lastMove || null,
     players: room.players.map(p => ({ name: p.name, color: p.color, connected: p.connected })),
     over: room.over || null,
+    paused: !!room.paused,
     clock: room.clock
   };
 }
@@ -89,13 +116,15 @@ function broadcast(room, obj, exceptWs) {
   }
 }
 
-function newRoom(code, hostWs, name) {
+function newRoom(code, hostWs, name, resumeToken) {
   const room = {
     code,
     state: E.initialState(),
     history: [],
-    players: [{ ws: hostWs, name, color: 'w', connected: true }],
+    players: [{ ws: hostWs, name, color: 'w', connected: true, resumeToken }],
     over: null,
+    paused: false,
+    cleanupTimer: null,
     clock: { w: 600, b: 600, lastTick: Date.now() },
     rematch: {}
   };
@@ -104,6 +133,7 @@ function newRoom(code, hostWs, name) {
 }
 
 function settleClock(room) {
+  if (room.paused || room.players.filter(p => p.connected).length < 2) return false;
   const now = Date.now();
   const elapsed = (now - room.clock.lastTick) / 1000;
   room.clock[room.state.turn] = Math.max(0, room.clock[room.state.turn] - elapsed);
@@ -117,18 +147,30 @@ function settleClock(room) {
 }
 
 wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
   send(ws, { type: 'roomList', rooms: roomList() });
 
   ws.on('message', (raw) => {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
+    if (msg.type === 'ping') {
+      const info = clients.get(ws);
+      const room = info && rooms.get(info.code);
+      if (room && !room.over && room.players.length === 2 && settleClock(room)) {
+        broadcast(room, { type: 'gameOver', ...roomPayload(room) });
+      }
+      return send(ws, { type: 'pong' });
+    }
+
     if (msg.type === 'create') {
       const name = String(msg.name || 'Jogador').slice(0, 20).trim() || 'Jogador';
+      const resumeToken = genResumeToken(msg.resumeToken);
       const code = genCode();
-      const room = newRoom(code, ws, name);
+      const room = newRoom(code, ws, name, resumeToken);
       clients.set(ws, { name, code, color: 'w' });
-      send(ws, { type: 'joined', ...roomPayload(room), yourColor: 'w', youAreHost: true });
+      send(ws, { type: 'joined', ...roomPayload(room), yourColor: 'w', youAreHost: true, yourResumeToken: resumeToken });
       broadcastRoomList();
     }
 
@@ -137,24 +179,46 @@ wss.on('connection', (ws) => {
       const code = String(msg.code || '').toUpperCase().trim();
       const room = rooms.get(code);
       if (!room) return send(ws, { type: 'error', message: 'Sala não encontrada. Verifique o código.' });
-      // reconexão: mesmo nome já está na sala
-      const existing = room.players.find(p => p.name.toLowerCase() === name.toLowerCase());
-      if (existing && existing.connected && existing.ws !== ws) {
+      // Reconnect by private device token; name fallback supports rooms created by older clients.
+      const requestedToken = String(msg.resumeToken || '').trim().slice(0, 128);
+      const existing = (requestedToken && room.players.find(p => p.resumeToken === requestedToken)) ||
+        room.players.find(p => p.name.toLowerCase() === name.toLowerCase());
+      const tokenMatches = !!(existing && requestedToken && existing.resumeToken === requestedToken);
+      if (existing && existing.connected && existing.ws !== ws && !tokenMatches) {
         return send(ws, { type: 'error', message: 'Esse apelido já está nesta sala. Escolha outro para entrar.' });
       }
       if (existing) {
-        existing.ws = ws; existing.connected = true;
+        if (!room.paused && !room.over && room.players.length === 2 && room.players.every(p => p.connected) && settleClock(room)) {
+          broadcast(room, { type: 'gameOver', ...roomPayload(room) });
+        }
+        if (room.cleanupTimer) { clearTimeout(room.cleanupTimer); room.cleanupTimer = null; }
+        const replacedSocket = existing.ws;
+        if (replacedSocket && replacedSocket !== ws) {
+          clients.delete(replacedSocket);
+          try { replacedSocket.close(4001, 'session resumed elsewhere'); } catch {}
+        }
+        existing.ws = ws; existing.name = name; existing.connected = true;
+        existing.resumeToken = requestedToken || existing.resumeToken || genResumeToken();
+        if (room.players.every(p => p.connected)) {
+          room.paused = false;
+          room.clock.lastTick = Date.now();
+        }
         clients.set(ws, { name, code, color: existing.color });
-        send(ws, { type: 'joined', ...roomPayload(room), yourColor: existing.color, youAreHost: existing.color === 'w' });
+        send(ws, { type: 'joined', ...roomPayload(room), yourColor: existing.color, youAreHost: existing.color === 'w', yourResumeToken: existing.resumeToken });
         broadcast(room, { type: 'opponentBack', ...roomPayload(room) }, ws);
         broadcastRoomList();
         return;
       }
       if (room.players.length >= 2) return send(ws, { type: 'error', message: 'Sala cheia (2 jogadores).' });
       const color = room.players.length === 0 ? 'w' : 'b';
-      room.players.push({ ws, name, color, connected: true });
+      const resumeToken = genResumeToken(msg.resumeToken);
+      room.players.push({ ws, name, color, connected: true, resumeToken });
+      if (room.players.length === 2 && room.players.every(p => p.connected)) {
+        room.paused = false;
+        if (room.history.length === 0 && !room.over) room.clock = { w: 600, b: 600, lastTick: Date.now() };
+      }
       clients.set(ws, { name, code, color });
-      send(ws, { type: 'joined', ...roomPayload(room), yourColor: color, youAreHost: color === 'w' });
+      send(ws, { type: 'joined', ...roomPayload(room), yourColor: color, youAreHost: color === 'w', yourResumeToken: resumeToken });
       broadcast(room, { type: 'opponentJoined', ...roomPayload(room) }, ws);
       broadcastRoomList();
     }
@@ -164,6 +228,9 @@ wss.on('connection', (ws) => {
       if (!info) return;
       const room = rooms.get(info.code);
       if (!room || room.over) return;
+      if (room.paused || !room.players.every(p => p.connected)) {
+        return send(ws, { type: 'error', message: 'Partida pausada até os jogadores se reconectarem.' });
+      }
       if (room.state.turn !== info.color) return send(ws, { type: 'error', message: 'Não é a sua vez.' });
       const move = E.findMove(room.state, msg.move.from, msg.move.to, msg.move.promotion);
       if (!move) return send(ws, { type: 'error', message: 'Lance ilegal.' });
@@ -232,11 +299,12 @@ wss.on('connection', (ws) => {
     const player = room.players.find(p => p.ws === ws);
     // Ignore the close event from an old socket after the player has reconnected.
     if (!player) return;
-    player.connected = false;
-    if (room.players.length < 2 || room.over) {
-      // sala vazia ou partida encerrada: remove após desconexão de todos
-      if (room.players.every(p => !p.connected)) rooms.delete(info.code);
+    if (!room.over && room.players.length === 2 && !room.paused && settleClock(room)) {
+      broadcast(room, { type: 'gameOver', ...roomPayload(room) });
     }
+    player.connected = false;
+    if (!room.over && room.players.length === 2) room.paused = true;
+    if (!room.players.some(p => p.connected)) scheduleRoomCleanup(room);
     broadcast(room, { type: 'opponentLeft', ...roomPayload(room) });
     broadcastRoomList();
   });
